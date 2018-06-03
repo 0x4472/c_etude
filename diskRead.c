@@ -4,6 +4,7 @@ int main(int argc, char* argv[]){
   char buf_r[BUFFER_SIZE]; //读取数据的缓冲区大小
   char *dev = "/dev/sdb";
   FILE *fp; // 文件描述符
+  int partition_type = -1;
 
   GPT_HEADER g_header;
 
@@ -14,18 +15,48 @@ int main(int argc, char* argv[]){
     return (-1);
   }
 
-  //读取分区表头
-  read_gpt_header(fp,&g_header);
-  //output_gpt_header(&g_header);
+  partition_type = read_partition_type(fp); 
 
-  //读取分区表
-  PARTITION partitions[128] = {0};
-  read_partition_info(fp, &g_header, partitions);
-  //output_partition(partitions);
+  if (partition_type == 0) {
+    DOS_PARTITION dos_partitions[DOS_PARTITION_SIZE];
+    BPB bpb;
 
-  read_first_partition(fp,partitions);
+    read_dos_partition_table(fp,dos_partitions);
+    //output_dos_partition(dos_partitions);
+    read_bpb_info(fp,dos_partitions, &bpb);
+    output_bpb(&bpb);
+    
+  } else if(partition_type == 1) {
+
+    //读取分区表头
+    read_gpt_header(fp,&g_header);
+    //output_gpt_header(&g_header);
+
+    //读取分区表
+    PARTITION partitions[128] = {0};
+    read_partition_info(fp, &g_header, partitions);
+    //output_partition(partitions);
+
+    //read_first_partition(fp,partitions);
+  }
+
   fclose(fp);
   return 0;
+}
+
+// 判断分区类型:返回值0 DOS分区；1 GPT分区
+int read_partition_type(FILE* fp) {
+  int data = 0;
+  if(!fread(&data,sizeof(int),1,fp)){
+    return -1;
+  }
+  if (data != 0) {
+    return 0;
+  } else {
+    return 1;
+  }
+
+
 }
 
 int read_gpt_header(FILE* fp,GPT_HEADER *g_header){
@@ -139,12 +170,83 @@ void output_partition(PARTITION *partitions) {
 }
 
 int read_first_partition(FILE* fp, PARTITION *partition){
+  char data[1024] = {0};
+
   // 定位文件指针至第一个扇区
   fseek(fp,partition->partition_start_sector * 512,SEEK_SET);
-  char data[1024] = {0};
   fread(data, 512,2 ,fp);
-
   hex_output(data,1024);
-
   return 0;
+}
+
+
+int read_dos_partition_table(FILE* fp,DOS_PARTITION *d_partitions) {
+  fseek(fp,DOS_PARTITION_OFFSET,SEEK_SET);
+  for(int i=0;i < DOS_PARTITION_SIZE; i++ ){
+    memset(d_partitions+i,0,sizeof(DOS_PARTITION));
+    if (!fread(d_partitions+i,sizeof(DOS_PARTITION),1,fp)) {
+      fprintf(stdout,"read dos partition error %x",fp);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+void output_dos_partition(DOS_PARTITION *d_partitions) {
+  DOS_PARTITION *d_partition = NULL;
+  for (int i=0; i < DOS_PARTITION_SIZE; i++) {
+    d_partition = d_partitions + i;
+    fprintf(stdout,"boot flag: 0x%02x\n",d_partition->boot_flag);
+    fprintf(stdout,"start header: %02d\n",d_partition->s_header);
+    fprintf(stdout,"start sector: %02d\n",d_partition->s_sector_cylinder & 0x3F);
+    fprintf(stdout,"start cylinder: %02d\n",(d_partition->s_sector_cylinder & 0xFFC0) >> 6);
+    fprintf(stdout,"partition type: 0x%02x\n",d_partition->partition_type);
+    fprintf(stdout,"end header: 0x%02d\n",d_partition->e_header);
+    fprintf(stdout,"end sector: %02d\n",d_partition->e_sector_cylinder & 0x3F);
+    fprintf(stdout,"end cylinder: %02d\n",(d_partition->e_sector_cylinder & 0xFFC0) >> 6);
+    fprintf(stdout,"preceding sectors: %02d\n",d_partition->preceding_sectors);
+    fprintf(stdout,"end cylinder: %02d\n",d_partition->total_sectors);
+    printf("\n");
+  }
+}
+
+// 读取分区表
+int read_bpb_info(FILE* fp,DOS_PARTITION *d_partition,BPB *bpb) {
+  int preceding_sectors = d_partition->preceding_sectors;
+  // 将文件指针定位至bpb的起始位置
+  fseek(fp,preceding_sectors * 512,SEEK_SET);
+  /*
+  char data[79] = {'\0'};
+  hex_output(data,79);
+  fread(data,sizeof(data),1,fp);
+
+  hex_output(data,79);
+  */
+  memset(bpb,0,sizeof(BPB));
+  if(!fread(bpb,sizeof(BPB),1,fp)) {
+    fprintf(stdout,"read bpb error %x",fp);
+    return -1; 
+  }
+  return 0;
+}
+
+void output_bpb(BPB *bpb) {
+  fprintf(stdout,"bytes per sector: %x\n", bpb->sector_bytes);
+  fprintf(stdout,"sectors per cluster: %x \n", bpb->cluster_sectors);
+  fprintf(stdout,"reserved sectors: %d \n", bpb->reserved_sectors);
+  fprintf(stdout,"fat tables: %x\n", bpb->fat_tables);
+  fprintf(stdout,"ss %d",sizeof(BPB));
+  /*
+  fprintf(stdout,"medium descriptor %d \n", bpb->medium_descriptor);
+  fprintf(stdout,"sectors per cylinder: %d \n", bpb->cylinder_sectors);
+  fprintf(stdout,"headers: %d \n", bpb->headers);
+  fprintf(stdout,"hidden sectors: %d \n", bpb->hidden_sectors);
+  fprintf(stdout,"flag: %d \n", bpb->flag);
+  fprintf(stdout,"version: %d \n", bpb->version);
+  fprintf(stdout,"root cluseter: %d \n", bpb->root_cluster);
+  fprintf(stdout,"filesystem sectors: %d \n", bpb->filesystem_sectors);
+  fprintf(stdout,"dbr backup sectors: %d \n", bpb->dbr_backup_sectors);
+  fprintf(stdout,"extend_flag: %d \n", bpb->extend_flag);
+  fprintf(stdout,"volumn num: %d \n", bpb->volumn_num);
+  */
 }
